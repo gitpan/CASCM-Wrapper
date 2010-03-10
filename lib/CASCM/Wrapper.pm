@@ -6,7 +6,7 @@ use strict;
 use Carp;
 
 ## Version
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 ## Logger
 our $log;
@@ -254,9 +254,12 @@ sub _run {
     }
 
     # Build argument string
-    my $arg_str = "-arg ";
-    $arg_str .= "$_ " for @args;
-    $arg_str =~ s{\s+$}{}g;
+    my $arg_str = '';
+    if (@args) {
+        $arg_str = "-arg ";
+        $arg_str .= "$_ " for @args;
+        $arg_str =~ s{\s+$}{}g;
+    }
 
     # Get option string for $cmd
     my $opt_str = $self->_get_option_str( $cmd, $context );
@@ -385,8 +388,10 @@ sub _get_cmd_options {
         'husrunlk' => [qw(b usr pw eh)],
     };
 
-    my @cmd_options = ( @{ $options->{common} }, @{ $options->{$cmd} } );
-    return sort { lc $a cmp lc $b } @cmd_options;
+    my @cmd_options =
+      sort { lc $a cmp lc $b }
+      ( @{ $options->{common} }, @{ $options->{$cmd} } );
+    return @cmd_options;
 }
 
 # Handle error/return
@@ -487,11 +492,11 @@ __END__
 
 =head1 NAME
 
-CASCM::Wrapper - Run CASCM (Harvest) commands
+CASCM::Wrapper - Run CA-SCM (Harvest) commands
 
 =head1 VERSION
 
-This document describes CASCM::Wrapper version 0.01
+This document describes CASCM::Wrapper version 0.02
 
 =head1 SYNOPSIS
 
@@ -543,7 +548,7 @@ This document describes CASCM::Wrapper version 0.01
 =head1 DESCRIPTION
 
 This module is a wrapper around CA-SCM (formerly known as Harvest) commands. It
-provides a I<perlish> interface to setting the context in which each command is
+provides a perl-ish interface to setting the context in which each command is
 executed, along with optional loading of context from files as well as parsing
 output logs.
 
@@ -555,7 +560,7 @@ The context is a I<hash of hashes> which contain the following types of keys:
 
 =item global
 
-This specifies the I<global> context. Any context set here will be applied to
+This specifies the global context. Any context set here will be applied to
 every command that uses it.
 
 	my $global_context = {
@@ -567,7 +572,7 @@ every command that uses it.
 =item command specific
 
 This provides a command specific context. Context set here will be applied only
-to those specific commands
+to those specific commands.
 
 	my $hco_context = {
 	                    hco => { up => 1,
@@ -578,30 +583,32 @@ to those specific commands
 
 =back
 
-The context items are synonymous with the command line options detailed in the
-CA-SCM Reference Manual. Options that do not require a value should be set to
-'1'. i.e. C<{hco => {up => 1} }> is equivalent of C<hco -up>.
+The global and command context keys are synonymous with the command line
+options detailed in the CA-SCM Reference Manual. Options that do not require a
+value should be set to '1'. i.e. C<{hco =E<gt> {up =E<gt> 1} }> is equivalent
+to C<hco -up>. The methods are intelligent enough to apply only the context
+keys that are used by a command. For e.g. a global context of C<vp> will not
+apply to C<hcp>.
 
 The 'common' options I<i> and I<di> are not applicable and ignored for all
-contexts. See L</SECURITY>
+commands. See L</SECURITY>
 
 The following methods are available to manage context
 
-=over
-
-=item set_context($context)
+=head2 set_context($context)
 
 Sets the context. Old context is forgotten. The argument provided must be a
 hash reference
 
-=item update_context($context)
+=head2 update_context($context)
 
 Updates the current context. The argument provided must be a hash reference
 
-=item load_context($file)
+=head2 load_context($file)
 
 This loads the context from an 'INI' file. The root parameters defines the
 global context. Each sectional parameter defines the command specific context.
+Old context is forgotten.
 
 	# Load context file at initialization. This will croak if it fails to read the context file
 	my $cascm = CASCM::Wrapper->new( { context_file => $file } );
@@ -629,15 +636,13 @@ This is a sample context file
 B<NOTE:> This method requires L<Config::Tiny> in order to read the context
 file.
 
-=item get_context
+=head2 get_context()
 
 Returns a hash reference of current context
 
 	my $context = $cascm->get_context();
 	use Data::Dumper;
 	print Dumper($context);
-
-=back
 
 =head1 CA-SCM METHODS
 
@@ -646,8 +651,9 @@ are synonymous with the methods used to invoke them.
 
 Every method accepts two optional arguments. The first is an hash reference
 that overrides/appends to the context for that method. This allows setting a
-context only for that specific call. The second is an array of arguments that
-is passed on to the 'h' command.
+context only for that specific method call. The second is an array of arguments
+that is passed on to the 'h' command. Any arguments provided is passed using
+the '-arg' option.
 
 	# No parameters. Everything required is already set in the context
 	$cascm->hdlp() or die $cascm->errstr;
@@ -731,7 +737,7 @@ The following CA-SCM commands are available as methods
 
 This module uses the I<di> option for executing CA-SCM commands. This prevents
 any passwords from being exposed while the command is running. The temporary
-I<di> file is deleted irrespective if the outcome.
+I<di> file is deleted irrespective if the outcome of the command.
 
 =head1 LOGGING
 
@@ -741,7 +747,7 @@ which in turn allows you to use any (supproted) Logging mechanism. When using
 this, any 'o' or 'oa' options specified in the context will be ignored. Your
 scripts will need to use the appropriate L<Log::Any::Adapter> to capture the
 log statements. The CA-SCM log is parsed and the messages are logged either as
-'INFO', 'WARNING' or 'ERROR'.
+'INFO', 'WARN' or 'ERROR'.
 
 	# Using Log4perl
 
@@ -756,7 +762,7 @@ log statements. The CA-SCM log is parsed and the messages are logged either as
 	my $log = Log::Log4perl->get_logger();
 
 	# Set parse_logs to true. This will croak if Log:Any is not found.
-	my $cascm = CASCM::Wrapper( { parse_logs => 1 } );
+	my $cascm = CASCM::Wrapper->new( { parse_logs => 1 } );
 
 	# Set Context
 	my $context = { ... };
@@ -770,7 +776,8 @@ log statements. The CA-SCM log is parsed and the messages are logged either as
 =head1 ERROR HANDLING
 
 All methods return true on success and C<undef> on failure. The error that most
-likely caused a failure can be obtained by calling C<$cascm->errstr>
+likely caused the I<last> failure can be obtained by calling the C<errstr>
+method.
 
 =head1 INSTALLATION
 
@@ -794,7 +801,7 @@ To install using L<CPAN>
 
 =head1 DEPENDENCIES
 
-CA-SCM r12 (or higher) client.
+CA-SCM r12 client. Harvest 7.1 might work, but has not been tested.
 
 The CA-SCM methods depends on the corresponding commands to be available in the
 I<PATH>
@@ -808,8 +815,8 @@ log files
 
 =head1 BUGS AND LIMITATIONS
 
-This module has been written using the reference manual for CA-SCM r12 (Fix
-Pack 02) and tested against the same.
+This module has been written using the reference manual for CA-SCM r12 and
+tested against the same.
 
 No bugs have been reported.
 
