@@ -14,7 +14,7 @@ use Carp qw(croak carp);
 #######################
 # VERSION
 #######################
-our $VERSION = '0.08';
+our $VERSION = '0.09';
 
 #######################
 # SETTINGS
@@ -129,7 +129,29 @@ sub dry_run {
 }
 
 # Get context
-sub get_context { return shift->{_context}; }
+sub get_context {
+    my ( $self, $cmd ) = @_;
+    my $context = {};
+    if ($cmd) {
+        $context = {
+
+            # Global
+            $self->{_context}->{global}
+            ? %{ $self->{_context}->{global} }
+            : (),
+
+            # Command specific
+            $self->{_context}->{$cmd}
+            ? %{ $self->{_context}->{$cmd} }
+            : (),
+        };
+    } ## end if ($cmd)
+    else {
+        $context = $self->{_context};
+    }
+
+    return $context;
+} ## end sub get_context
 
 # Get error message
 sub errstr { return shift->{_errstr}; }
@@ -210,7 +232,7 @@ sub _init {
     # Basic initliazation
     $self->{_options} = {};
     $self->{_context} = {};
-    $self->{_errstr}  = qw();
+    $self->{_errstr}  = q();
 
     # Make sure we have a option hash ref
     if ( ref $options_ref ne 'HASH' ) { croak "Hash reference expected"; }
@@ -264,7 +286,7 @@ sub _run {
     my @args = @_;
 
     # Reset error
-    $self->_err(qw());
+    $self->_err(q());
 
     # Check for context
     my $run_context = {};
@@ -275,9 +297,8 @@ sub _run {
     my $parse_log = $self->{_options}->{'parse_logs'};
 
     # Get cmd context
-    my $global_context = $self->get_context()->{global} || {};
-    my $cmd_context    = $self->get_context()->{$cmd}   || {};
-    my $context = { %{$global_context}, %{$cmd_context}, %{$run_context} };
+    my $cmd_context = $self->get_context($cmd) || {};
+    my $context = { %{$cmd_context}, %{$run_context} };
 
     # Check if we're parsing logs
     my $default_log = File::Temp->new()->filename;
@@ -312,7 +333,7 @@ sub _run {
 
     # Run command
     my $cmd_str = "$cmd -di \"${di_file}\"";
-    my $out     = `$cmd_str 2>&1`;
+    my $out     = qx($cmd_str 2>&1);
     my $rc      = $?;
 
     # Cleanup DI file if command didn't remove it
@@ -414,6 +435,7 @@ sub _get_cmd_options {
     };
 
 #>>>
+
     my @cmd_options = sort { lc $a cmp lc $b }
         ( @{ $options->{common} }, @{ $options->{$cmd} } );
     return @cmd_options;
@@ -421,15 +443,12 @@ sub _get_cmd_options {
 
 # Handle error/return
 sub _handle_error {
-    my $self = shift;
-    my $cmd  = shift;
-    my $rc   = shift;
-    my $out  = shift || '';
+    my ( $self, $cmd, $rc, $out ) = @_;
 
     # Standard cases
     my %error = (
-        '1' =>
-            "Command syntax for $cmd is incorrect. Please check your context setting",
+        '1' => "Command syntax for $cmd is incorrect."
+            . ' Please check your context setting',
         '2'  => 'Broker not connected',
         '3'  => "$cmd failed",
         '4'  => 'Unexpected error',
@@ -466,6 +485,20 @@ sub _handle_error {
         );
     } ## end elsif ( $cmd eq 'hexecp' )
 
+    # Cleanup command output
+    if ($out) {
+        my @lines;
+        foreach my $line ( split( /\r\n|\n/, $out ) ) {
+            chomp $line;
+            next unless $line;
+            next if $line =~ /^[[:blank:]]$/;
+            push @lines, $line;
+        } ## end foreach my $line ( split( /\r\n|\n/...))
+
+        # Reset
+        $out = join( '. ', @lines );
+    } ## end if ($out)
+
     # Get error message
     my $msg;
     if ( $rc == -1 ) {
@@ -475,7 +508,7 @@ sub _handle_error {
         return;
     } ## end if ( $rc == -1 )
     elsif ( $rc > 0 ) {
-        $rc >>= 8;
+        if ( $rc > 255 ) { $rc = $rc >> 8; }
         $msg = $error{$rc} || "Uknown error";
         $msg .= " : $out" if $out;
         $self->_err($msg);
@@ -527,301 +560,324 @@ __END__
 
 CASCM::Wrapper - Run CA-SCM (Harvest) commands
 
-	use CASCM::Wrapper;
+    use CASCM::Wrapper;
 
-	# Initialize
-	my $cascm = CASCM::Wrapper->new();
+    # Initialize
+    my $cascm = CASCM::Wrapper->new();
 
-	# Set Context
-	$cascm->set_context(
-	    {    # Set a global context. This is applied to all commands where required
-	       global => { b  => 'harvest',
-	                   eh => 'user.dfo',
-	       },
+    # Set Context
+    $cascm->set_context(
+        {
+            # Set a global context.
+            # This is applied to all commands where required
+            global => {
+                b  => 'harvest',
+                eh => 'user.dfo',
+            },
 
-	       # Set 'hco' specific context, applied only to hco commands
-	       hco => { up => 1,
-	                vp => '\repository\myapp\src',
-	                pn => 'Checkout Items',
-	       },
+            # Set 'hco' specific context,
+            #   applied only to hco commands
+            hco => {
+                up => 1,
+                vp => '\repository\myapp\src',
+                pn => 'Checkout Items',
+            },
 
-	       # Similarly for 'hci'
-	       hci => { vp => '\repository\myapp\src',
-	                pn => 'Checkin Items',
-	                de => 'Shiny new feature',
-	       },
+            # Similarly for 'hci'
+            hci => {
+                vp => '\repository\myapp\src',
+                pn => 'Checkin Items',
+                de => 'Shiny new feature',
+            },
 
-	       # And 'hcp'
-	       hcp => { st => 'development',
-	                at => 'userid',
-	       },
-	    }
-	) or die $cascm->errstr;
+            # And 'hcp'
+            hcp => {
+                st => 'development',
+                at => 'userid',
+            },
+        }
+    ) or die $cascm->errstr;
 
-	# Create Package
-	my $pkg = 'new_package';
-	$cascm->hcp($pkg) or die $cascm->errstr;
+    # Create Package
+    my $pkg = 'new_package';
+    $cascm->hcp($pkg) or die $cascm->errstr;
 
-	# Checkout files
-	my @files = qw(foo.c bar.c);
-	$cascm->hco( { p => $pkg }, @files ) or die $cascm->errstr;
+    # Checkout files
+    my @files = qw(foo.c bar.c);
+    $cascm->hco( { p => $pkg }, @files ) or die $cascm->errstr;
 
-	# Update Context
-	$cascm->update_context( { hci => { p => $pkg }, } ) or die $cascm->errstr;
+    # Update Context
+    $cascm->update_context( { hci => { p => $pkg }, } ) or die $cascm->errstr;
 
-	# Checkin files
-	$cascm->hci(@files) or die $cascm->errstr;
+    # Checkin files
+    $cascm->hci(@files) or die $cascm->errstr;
 
 =head1 DESCRIPTION
 
-This module is a wrapper around CA Software Change Manager's (formerly known as
-Harvest) commands. It provides a perl-ish interface to setting the context in
-which each command is executed, along with optional loading of context from
-files as well as parsing output logs.
+This module is a wrapper around CA Software Change Manager's (formerly
+known as Harvest) commands. It provides a perl-ish interface to setting
+the context in which each command is executed, along with optional
+loading of context from files as well as parsing output logs.
 
 =head1 CONTEXT
 
-The context is a I<hash of hashes> which contain the following types of keys:
+The context is a I<hash of hashes> which contain the following types of
+keys:
 
 =over
 
 =item global
 
-This specifies the global context. Any context set here will be applied to
-every command that uses it.
+This specifies the global context. Any context set here will be applied
+to every command that uses it.
 
-	my $global_context = {
-	                       global => { b  => 'harvest',
-	                                   eh => 'user.dfo',
-	                       },
-	  };
+    my $global_context = {
+        global => {
+            b  => 'harvest',
+            eh => 'user.dfo',
+        },
+    };
 
 =item command specific
 
-This provides a command specific context. Context set here will be applied only
-to those specific commands.
+This provides a command specific context. Context set here will be
+applied only to those specific commands.
 
-	my $hco_context = {
-	                    hco => { up => 1,
-	                             vp => '\repository\myapp\src',
-	                             pn => 'Checkout Items',
-	                    },
-	};
+    my $hco_context = {
+        hco => {
+            up => 1,
+            vp => '\repository\myapp\src',
+            pn => 'Checkout Items',
+        },
+    };
 
 =back
 
-The global and command context keys are synonymous with the command line
-options detailed in the CA-SCM Reference Manual. Options that do not require a
-value should be set to '1'. i.e. C<{hco =E<gt> {up =E<gt> 1} }> is equivalent
-to C<hco -up>. The methods are intelligent enough to apply only the context
-keys that are used by a command. For e.g. a global context of C<vp> will not
-apply to C<hcp>.
+The global and command context keys are synonymous with the command
+line options detailed in the CA-SCM Reference Manual. Options that do
+not require a value should be set to '1'. i.e. C<< {hco => {up => 1} }
+>> is equivalent to C<hco -up>. The methods are intelligent enough to
+apply only the context keys that are used by a command. For e.g. a
+global context of C<vp> will not apply to C<hcp>.
 
-The 'common' options I<i> and I<di> are not applicable and ignored for all
-commands. See L</SECURITY>
+The common options I<i> and I<di> are not applicable and ignored for
+all commands. See L</SECURITY>
 
 The following methods are available to manage context
 
 =head2 set_context($context)
 
-Sets the context. Old context is forgotten. The argument provided must be a
-hash reference
+Sets the context. Old context is forgotten. The argument provided must
+be a hash reference
 
 =head2 update_context($context)
 
-Updates the current context. The argument provided must be a hash reference
+Updates the current context. The argument provided must be a hash
+reference
 
 =head2 load_context($file)
 
-This loads the context from an 'INI' file. The root parameters defines the
-global context. Each sectional parameter defines the command specific context.
-Old context is forgotten.
+This loads the context from an I<INI> file. The root parameters defines
+the global context. Each sectional parameter defines the command
+specific context. Old context is forgotten.
 
-	# Load context file at initialization. This will croak if it fails to read the context file
-	my $cascm = CASCM::Wrapper->new( { context_file => $file } );
+    # Load context file at initialization.
+    #   This will croak if it fails to read the context file
+    my $cascm = CASCM::Wrapper->new( { context_file => $file } );
 
-	# Alternatively
-	$cascm->load_context($file) or die $cascm->errstr;
+    # Alternatively
+    $cascm->load_context($file) or die $cascm->errstr;
 
 This is a sample context file
 
-	# Sample context file
+    # Sample context file
 
-	# Root parameters. These define the 'global' context
-	b  = harvest
-	eh = user.dfo
+    # Root parameters. These define the 'global' context
+    b  = harvest
+    eh = user.dfo
 
-	# Sectional parameters. These define the 'command' context
+    # Sectional parameters. These define the 'command' context
 
-	[hco]
-		up = 1
-		vp = \repository\myapp\src
+    [hco]
+        up = 1
+        vp = /repository/myapp/src
 
-	[hcp]
-		st = development
+    [hcp]
+        st = development
 
-B<NOTE:> This method requires L<Config::Tiny> in order to read the context
-file.
+B<NOTE:> This method requires L<Config::Tiny> in order to read the
+context file.
 
 =head2 get_context()
 
 Returns a hash reference of current context
 
-	my $context = $cascm->get_context();
-	use Data::Dumper;
-	print Dumper($context);
+    my $context = $cascm->get_context();
+    use Data::Dumper;
+    print Dumper($context);
+
+You can also get a command specific context by passing the command as
+an argument
+
+    my $hco_context = $cascm->get_context('hco);
+    user Data::Dumper;
+    print Dumper($hco_context);
+
 
 =head1 CA-SCM METHODS
 
-Almost every 'h' command that uses a context is supported. The command names
-are synonymous with the methods used to invoke them.
+Almost every 'h' command that uses a context is supported. The command
+names are synonymous with the methods used to invoke them.
 
-Every method accepts two optional arguments. The first is an hash reference
-that overrides/appends to the context for that method. This allows setting a
-context only for that specific method call. The second is an array of arguments
-that is passed on to the 'h' command. Any arguments provided is passed using
-the '-arg' option.
+Every method accepts two optional arguments. The first is an hash
+reference that overrides/appends to the context for that method. This
+allows setting a context only for that specific method call. The second
+is an array of arguments that is passed on to the 'h' command. Any
+arguments provided is passed using the '-arg' option.
 
-	# No parameters. Everything required is already set in the context
-	$cascm->hdlp() or die $cascm->errstr;
+    # No parameters. Everything required is already set in the context
+    $cascm->hdlp() or die $cascm->errstr;
 
-	# Array of arguments
-	$cascm->hci( @files ) or die $cascm->errstr;
+    # Array of arguments
+    $cascm->hci( @files ) or die $cascm->errstr;
 
-	# Override/Append to context
-	$cascm->hci( { p => 'new_package' }, @files ) or die $cascm->errstr;
+    # Override/Append to context
+    $cascm->hci( { p => 'new_package' }, @files ) or die $cascm->errstr;
 
-The methods can be called in a 'dry run' mode. Where the method returns the
-full command line, without executing anything. This can be useful for
-debugging.
+The methods can be called in a I<dry run> mode. Where the method
+returns the full command line, without executing anything. This can be
+useful for debugging.
 
-	$cascm = CASCM::Wrapper->new( { dry_run => 1 } );
-	$cascm->set_context($context);
-	$cmd = $cascm->hsync();
-	print "Calling hsync() would have executed -> $cmd";
+    $cascm = CASCM::Wrapper->new( { dry_run => 1 } );
+    $cascm->set_context($context);
+    $cmd = $cascm->hsync();
+    print "Calling hsync() would have executed -> $cmd";
 
 The following CA-SCM commands are available as methods
 
-	hap
-	har
-	hci
-	hco
-	hcp
-	hdp
-	hdv
-	hft
-	hlr
-	hlv
-	hpg
-	hpp
-	hri
-	hrt
-	hsv
-	hup
-	hcbl
-	hchu
-	hcpj
-	hdlp
-	hspp
-	hsql
-	hudp
-	hfatt
-	hsmtp
-	hsync
-	hccmrg
-	hdelss
-	hexecp
-	hmvitm
-	hmvpkg
-	hmvpth
-	hrnitm
-	hrnpth
-	haccess
-	hcrrlte
-	hexpenv
-	hgetusg
-	himpenv
-	hrmvpth
-	hsigget
-	hsigset
-	htakess
-	hucache
-	husrmgr
-	husrunlk
-	hchgtype
-	hcmpview
-	hcropmrg
-	hcrtpath
-	hdbgctrl
-	hpkgunlk
-	hppolget
-	hppolset
-	hrefresh
-	hrepedit
-	hrepmngr
-	hauthsync
-	hformsync
+    hap
+    har
+    hci
+    hco
+    hcp
+    hdp
+    hdv
+    hft
+    hlr
+    hlv
+    hpg
+    hpp
+    hri
+    hrt
+    hsv
+    hup
+    hcbl
+    hchu
+    hcpj
+    hdlp
+    hspp
+    hsql
+    hudp
+    hfatt
+    hsmtp
+    hsync
+    hccmrg
+    hdelss
+    hexecp
+    hmvitm
+    hmvpkg
+    hmvpth
+    hrnitm
+    hrnpth
+    haccess
+    hcrrlte
+    hexpenv
+    hgetusg
+    himpenv
+    hrmvpth
+    hsigget
+    hsigset
+    htakess
+    hucache
+    husrmgr
+    husrunlk
+    hchgtype
+    hcmpview
+    hcropmrg
+    hcrtpath
+    hdbgctrl
+    hpkgunlk
+    hppolget
+    hppolset
+    hrefresh
+    hrepedit
+    hrepmngr
+    hauthsync
+    hformsync
 
 
 =head1 SECURITY
 
-This module uses the I<di> option for executing CA-SCM commands. This prevents
-any passwords from being exposed while the command is running. The temporary
-I<di> file is deleted irrespective if the outcome of the command.
+This module uses the I<di> option for executing CA-SCM commands. This
+prevents any passwords from being exposed while the command is running.
+The temporary I<di> file is deleted irrespective if the outcome of the
+command.
 
 =head1 LOGGING
 
-Since CA-SCM commands output only to log files, this module allows parsing and
-logging of a command's output. L<Log::Any> is required to use this feature,
-which in turn allows you to use any (supported) Logging mechanism. When using
-this, any 'o' or 'oa' options specified in the context will be ignored. Your
-scripts will need to load the appropriate L<Log::Any::Adapter> to capture the
-log statements. The CA-SCM log is parsed and the messages are logged either as
-'INFO', 'WARN' or 'ERROR'.
+Since CA-SCM commands output only to log files, this module allows
+parsing and logging of a command's output. L<Log::Any> is required to
+use this feature, which in turn allows you to use any (supported)
+Logging mechanism. When using this, any C<o> or C<oa> options specified
+in the context will be ignored. Your scripts will need to load the
+appropriate L<Log::Any::Adapter> to capture the log statements. The
+CA-SCM log is parsed and the messages are logged either as L<INFO>,
+L<WARN> or L<ERROR>.
 
-	# Using Log4perl
+    # Using Log4perl
 
-	use CASCM::Wrapper;
-	use Log::Log4perl;
-	use Log::Any::Adapter;
+    use CASCM::Wrapper;
+    use Log::Log4perl;
+    use Log::Any::Adapter;
 
-	Log::Log4perl->init('log4perl.conf');
-	Log::Any::Adapter->set('Log4perl');
+    Log::Log4perl->init('log4perl.conf');
+    Log::Any::Adapter->set('Log4perl');
 
-	# Get logger
-	my $log = Log::Log4perl->get_logger();
+    # Get logger
+    my $log = Log::Log4perl->get_logger();
 
-	# Set parse_logs to true. This will croak if Log:Any is not found.
-	my $cascm = CASCM::Wrapper->new( { parse_logs => 1 } );
+    # Set parse_logs to true. This will croak if Log:Any is not found.
+    my $cascm = CASCM::Wrapper->new( { parse_logs => 1 } );
 
-	# Set Context
-	my $context = { ... };
-	$cascm->set_context($context);
+    # Set Context
+    my $context = { ... };
+    $cascm->set_context($context);
 
-	# Calling the method automatically will parse the log output into the Log4perl object
-	# The output is also logged in the 'CASCM::Wrapper' category.
+    # Calling the method automatically will parse the log output into the Log4perl object
+    # The output is also logged in the 'CASCM::Wrapper' category.
 
-	$cascm->hco(@files) or die $cascm->errstr;
+    $cascm->hco(@files) or die $cascm->errstr;
 
 =head1 ERROR HANDLING
 
-All methods return true on success and C<undef> on failure. The error that most
-likely caused the I<last> failure can be obtained by calling the C<errstr>
-method.
+All methods return true on success and C<undef> on failure. The error
+that most likely caused the I<last> failure can be obtained by calling
+the C<errstr> method.
 
 =head1 DEPENDENCIES
 
-CA-SCM r12 (or higher) client. Harvest 7.1 might work, but has not been tested.
+CA-SCM r12 (or higher) client. Harvest 7.1 might work, but has not been
+tested.
 
-The CA-SCM methods depends on the corresponding commands to be available in the
-I<PATH>
+The CA-SCM methods depends on the corresponding commands to be
+available in the I<PATH>
 
 At least Perl 5.6.1 is required to run.
 
 Optionally, L<Config::Tiny> is required to read context files
 
-Optionally, L<Log::Any> and L<Log::Any::Adapter> is required to parse CA-SCM
-log files
+Optionally, L<Log::Any> and L<Log::Any::Adapter> is required to parse
+CA-SCM log files
 
 =head1 SEE ALSO
 
@@ -830,8 +886,8 @@ Manager|http://www.ca.com/us/products/detail/CA-Software-Change-Manager.aspx>
 
 =head1 BUGS AND LIMITATIONS
 
-Please report any bugs or feature requests to C<bug-cascm-wrapper@rt.cpan.org>,
-or through the web interface at
+Please report any bugs or feature requests to
+C<bug-cascm-wrapper@rt.cpan.org>, or through the web interface at
 L<http://rt.cpan.org/Public/Dist/Display.html?Name=CASCM-Wrapper>
 
 =head1 AUTHOR
@@ -842,7 +898,7 @@ Mithun Ayachit C<mithun@cpan.org>
 
 Copyright (c) 2012, Mithun Ayachit. All rights reserved.
 
-This module is free software; you can redistribute it and/or modify it under
-the same terms as Perl itself. See L<perlartistic>.
+This module is free software; you can redistribute it and/or modify it
+under the same terms as Perl itself. See L<perlartistic>.
 
 =cut
