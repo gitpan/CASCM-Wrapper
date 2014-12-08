@@ -3,6 +3,45 @@ Mithun Ayachit
 
 
 
+0.16.1
+
+
+-   No functional changes. Use semver and move bugtracker to
+    github-issues
+
+
+
+0.16
+
+
+-   Move bug tracking to github-issues
+
+
+
+0.15
+
+
+-   Always quote option values
+-   Provide cleaner log messages if command execution failed in the
+    shell
+
+
+
+0.14
+
+
+-   Log command output using Log::Any
+-   Trim log and output lines before logging them
+
+
+
+0.13
+
+
+-   It would help to actually set the exitval
+
+
+
 0.12
 
 

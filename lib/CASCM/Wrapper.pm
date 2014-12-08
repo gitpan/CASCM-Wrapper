@@ -14,7 +14,7 @@ use Carp qw(croak carp);
 #######################
 # VERSION
 #######################
-our $VERSION = '0.12';
+our $VERSION = '0.16.1';
 
 #######################
 # MODULE METHODS
@@ -148,6 +148,23 @@ sub errstr { return shift->{_errstr}; }
 
 # Get return code
 sub exitval { return shift->{_exitval}; }
+
+# Make argument string
+sub make_arg_str {
+    my ( $self, @args ) = @_;
+    my @quoted;
+    foreach my $arg (@args) {
+      next unless defined $arg;
+        $arg =~ s{^\"(.*)\"$}{$1}xi;
+        $arg =~ s{^\'(.*)\'$}{$1}xi;
+        $arg = '"' . $arg . '"';
+        push( @quoted, $arg );
+    } ## end foreach my $arg (@args)
+
+    my $arg_str = '';
+    $arg_str = join( ' ', map { "-arg=$_" } @quoted ) if (@quoted);
+  return $arg_str;
+} ## end sub make_arg_str
 
 #######################
 # CASCM METHODS
@@ -316,10 +333,7 @@ sub _run {
     } ## end if ($parse_log)
 
     # Build argument string
-    my $arg_str = q();
-    if (@args) {
-        $arg_str = join( ' ', map { "-arg=$_" } @args );
-    }
+    my $arg_str = $self->make_arg_str(@args);
 
     # Get option string for $cmd
     my $opt_str = $self->_get_option_str( $cmd, $context );
@@ -342,11 +356,14 @@ sub _run {
     # Cleanup DI file if command didn't remove it
     if ( -f $di_file ) { unlink $di_file; }
 
+    # Handle command error and return codes
+    my $method_return_value = $self->_handle_error( $cmd, $rc, $out );
+
     # Parse log
-    _parse_log( $default_log, $parse_log ) if $parse_log;
+    $self->_parse_log( $default_log, $parse_log ) if $parse_log;
 
     # Return
-  return $self->_handle_error( $cmd, $rc, $out );
+  return $method_return_value;
 } ## end sub _run
 
 # Get run context
@@ -379,8 +396,20 @@ sub _get_option_str {
     foreach my $option (@cmd_options) {
       next unless $context->{$option};
         my $val = $context->{$option};
-        if   ( $val eq '1' ) { push @opt_args, "-${option}"; }
-        else                 { push @opt_args, "-${option}", $val; }
+        if ( $val eq '1' ) {
+            push @opt_args, "-${option}";
+        }
+        else {
+            if ( $val =~ m{^\s*\-arg} ) {
+                push @opt_args, "-${option}", $val;
+            }
+            else {
+                $val =~ s{^\"(.*)\"$}{$1}xi;
+                $val =~ s{^\'(.*)\'$}{$1}xi;
+                $val = '"' . $val . '"';
+                push @opt_args, "-${option}", $val;
+            } ## end else [ if ( $val =~ m{^\s*\-arg})]
+        } ## end else [ if ( $val eq '1' ) ]
     } ## end foreach my $option (@cmd_options)
 
   return join( ' ', @opt_args );
@@ -466,6 +495,12 @@ sub _get_cmd_options {
 sub _handle_error {
     my ( $self, $cmd, $rc, $out ) = @_;
 
+    # Fix return code
+    if ( $rc > 255 ) { $rc = $rc >> 8; }
+
+    # Save exitval
+    $self->_exitval($rc);
+
     # Standard cases
     my %error = (
         '1' => "Command syntax for $cmd is incorrect."
@@ -511,6 +546,8 @@ sub _handle_error {
         my @lines;
         foreach my $line ( split( /\r\n|\r|\n/, $out ) ) {
             chomp $line;
+            $line =~ s{^\s+}{}gxi;
+            $line =~ s{\s+$}{}gxi;
           next unless $line;
           next if $line =~ /^[[:blank:]]$/;
             push @lines, $line;
@@ -529,9 +566,14 @@ sub _handle_error {
       return;
     } ## end if ( $rc == -1 )
     elsif ( $rc > 0 ) {
-        if ( $rc > 255 ) { $rc = $rc >> 8; }
-        $msg = $error{$rc} || "Unknown error";
-        $msg .= " : $out" if $out;
+        if ( $error{$rc} ) {
+            $msg = $error{$rc};
+            $msg .= " : $out" if $out;
+        } ## end if ( $error{$rc} )
+        else {
+            if   ($out) { $msg = $out; }
+            else        { $msg = 'Unknown error'; }
+        } ## end else [ if ( $error{$rc} ) ]
         $self->_err($msg);
       return;
     } ## end elsif ( $rc > 0 )
@@ -542,7 +584,7 @@ sub _handle_error {
 
 # Parse Log
 sub _parse_log {
-    my ( $logfile, $category ) = @_;
+    my ( $self, $logfile, $category ) = @_;
 
     $category ||= 0;
     $category = __PACKAGE__ if ( $category eq '1' );
@@ -551,26 +593,38 @@ sub _parse_log {
       = Log::Any->get_logger( $category ? ( category => $category ) : () );
 
     if ( not -f $logfile ) {
-        $log->error("Logfile $logfile does not exist");
+
+        # The log file was probably not created
+        #   if the command didn't even execute
+        $log->error( $self->errstr() ) if ( $self->errstr() );
       return 1;
     } ## end if ( not -f $logfile )
 
-    open( my $L, '<', $logfile )
-      or do { $log->error("Unable to read $logfile") and return 1; };
-    while (<$L>) {
+    open( my $LOG, '<', $logfile ) or do {
+        $log->warn("Unable to read $logfile");
+        $log->error( $self->errstr() ) if ( $self->errstr() );
+      return 1;
+    };
+
+    while (<$LOG>) {
         my $line = $_;
       next unless defined $line;
         chomp $line;
+        $line =~ s{^\s+}{}gxi;
+        $line =~ s{\s+$}{}gxi;
       next unless $line;
       next if $line =~ /^[[:blank:]]*$/;
 
-        if    ( $line =~ s/^\s*E0\w{7}:\s*//x ) { $log->error($line); }
-        elsif ( $line =~ s/^\s*W0\w{7}:\s*//x ) { $log->warn($line); }
-        elsif ( $line =~ s/^\s*I0\w{7}:\s*//x ) { $log->info($line); }
-        else                                    { $log->info($line); }
-    } ## end while (<$L>)
-    close $L;
-    unlink($logfile) or $log->warn("Unable to delete $logfile");
+        if    ( $line =~ s/^\s*E0\w{7}\:\s*//x ) { $log->error($line); }
+        elsif ( $line =~ s/^\s*W0\w{7}\:\s*//x ) { $log->warn($line); }
+        elsif ( $line =~ s/^\s*I0\w{7}\:\s*//x ) { $log->info($line); }
+        else                                     { $log->info($line); }
+    } ## end while (<$LOG>)
+    close $LOG;
+    unlink($logfile);
+
+    $log->error( $self->errstr() ) if ( $self->errstr() );
+
   return 1;
 } ## end sub _parse_log
 
@@ -925,9 +979,8 @@ Manager|http://www.ca.com/us/products/detail/CA-Software-Change-Manager.aspx>
 
 =head1 BUGS AND LIMITATIONS
 
-Please report any bugs or feature requests to
-C<bug-cascm-wrapper@rt.cpan.org>, or through the web interface at
-L<http://rt.cpan.org/Public/Dist/Display.html?Name=CASCM-Wrapper>
+Please report any bugs or feature requests at
+L<https://github.com/mithun/perl-cascm-wrapper/issues>
 
 =head1 AUTHOR
 
@@ -935,7 +988,7 @@ Mithun Ayachit C<mithun@cpan.org>
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright (c) 2013, Mithun Ayachit. All rights reserved.
+Copyright (c) 2014, Mithun Ayachit. All rights reserved.
 
 This module is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself. See L<perlartistic>.
